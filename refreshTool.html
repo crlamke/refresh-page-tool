@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html>
+<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+<meta content="utf-8" http-equiv="encoding">
+
+<style type="text/css">
+
+html{
+/*	background:url('../dev/clock-alarm-timer/img/sunset-sky.jpg') #dbe4e6; */
+	background-size:cover;
+	overflow:hidden;
+}
+body {background-color: SteelBlue ;}
+h1   {color: black;}
+p    {color: red;}
+#requeryIntervalInput {width: 6em;}
+#requeryIntervalMinInput {width: 6em;}
+#requeryIntervalMaxInput {width: 6em;}
+#iterationsInput {width: 6em;}
+#targetURLInput {width: 32em;}
+#status {padding: "20";  text-align: center;font-size: 20px;}
+#autorefresh-controls {padding: "20"; text-align: center; font-size: 24px;}
+#autorefresh-settings {padding: "20"}
+.startStopButton {width: 70px; height: 40px; margin: 25px 10px 25px 10px;}
+
+#embedded-page {
+  width: 100%;
+  padding: 50px 0;
+  text-align: center;
+  margin-top: 20px;
+}
+
+
+</style>
+
+<body>
+
+<center><h1>Refresh Tool</h1></center>
+
+<div id="autorefresh-controls">
+<b>Auto Refresh</b>
+<button id="startButton" class="startStopButton" onclick="startAutorefresh()">Start</button>
+<button id="stopButton" class="startStopButton" onclick="stopAutorefresh()">Stop</button>
+</div>
+<BR>
+<div id="status">
+<b>Time: </b><span id="timeDisplay"></span>
+<br>
+<b>Status: </b><span id="statusDisplay"></span>
+<br>
+<b>Secs Till Requery: </b> <span id="secsTillRequeryDisplay"></span>
+<br>
+<b>Refresh Count: </b> <span id="refreshCountDisplay"></span>
+</div>
+<BR>
+<b>Load URL in:</b>
+<select id="load-url-select" onchange="loadURLSelect(this.options[this.selectedIndex].value)">
+  <optgroup label="Window">
+    <option value="optPage" >New Window</option>
+    <option value="optCurrentWindow" selected>Current Window</option>
+  </optgroup>
+  <optgroup label="Frame">
+    <option value="optFrame">Embedded Frame</option>
+  </optgroup>
+</select>
+<BR><BR>
+
+<div id="autorefresh-settings">
+<b>Target URL: </b><input type="text" size="32" id="targetURLInput" onchange="urlUpdate(this.value)">
+<BR><BR>
+<b>Requery Interval: </b><input title="Seconds from 1-86400" type="number" size="5" min="1" max="86400" id="requeryIntervalInput" onchange="intervalUpdate(this.value)">
+<BR><BR>
+<b>Iterations: </b><input title="0 - 99999, 0 = Continue until stopped" type="number" size="5" min="0" max="99999" id="iterationsInput" onchange="iterationsUpdate(this.value)">
+<BR><BR>
+<b>Requery Interval Range: </b>
+<b>Min </b><input title="Minimum Seconds (0-86400)" type="number" size="5" min="0" max="86400" id="requeryIntervalMinInput" onchange="intervalMinUpdate(this.value)">
+<b>&nbsp - &nbsp</b>
+<b>Max </b><input title="Minimum Seconds (0-86400)" type="number" size="5" min="0" max="86400" id="requeryIntervalMaxInput" onchange="intervalMaxUpdate(this.value)">
+</div>
+
+<div id="embedded-page" display="none">
+
+<h3>Target URL</h3>
+
+<iframe height="300px" width="75%" src="demo_iframe.htm" id="queryTargetFrame" name="iframe_a"></iframe>
+</div>
+
+<script>
+ 
+var RunState = {
+  STOPPED: 0,
+  RUNNING: 1
+}
+
+var URLLoadOption = {
+  NEW_WINDOW: 0,
+  CURRENT_WINDOW: 1,
+  FRAME: 2
+}
+
+var childWindow = null;
+var requerySeconds = 300;
+var intervalMinSeconds = 0;
+var intervalMaxSeconds = 0;
+var iterations = 0;
+var queryURL = "https://google.com"
+var intervalFunc = null;
+var refreshCount = 0;
+var requeryTime = new Date();
+var runState = RunState.STOPPED;
+var urlLoadOption = URLLoadOption.CURRENT_WINDOW;
+
+window.onload = initializePage;
+
+function initializePage() {
+  document.getElementById("statusDisplay").innerHTML = "Stopped";
+  document.getElementById("requeryIntervalInput").value = requerySeconds;
+  document.getElementById("requeryIntervalMinInput").value = intervalMinSeconds;
+  document.getElementById("requeryIntervalMaxInput").value = intervalMaxSeconds;
+  document.getElementById("iterationsInput").value = iterations;
+  document.getElementById("targetURLInput").value = queryURL;
+  setIFrameVisibility(0);
+  //updateFrameURL(queryURL);
+  document.getElementById("stopButton").disabled = true; 
+  keepTime();
+}
+
+function startAutorefresh() {
+    startInterval();
+	intervalFunc = setInterval(function() {
+		startInterval();
+		}, requerySeconds * 1000);
+	runState = RunState.RUNNING;
+	document.getElementById("statusDisplay").innerHTML = "Running";
+	currentTime = new Date();
+	// console.log("requeryTime " + formatTimeHMS(requeryTime) + " requerySeconds " + requerySeconds);
+	requeryTime = dateAdd(currentTime, 'second', requerySeconds)
+	// console.log("requeryTime " + formatTimeHMS(requeryTime) + "requerySeconds " + requerySeconds);
+	var secsTillRequery = (requeryTime.getTime() - currentTime.getTime()) / 1000;
+	document.getElementById("secsTillRequeryDisplay").innerHTML = secsTillRequery;
+	// console.log("secsTillRequery " + secsTillRequery);
+	document.getElementById("startButton").disabled = true; 
+    document.getElementById("stopButton").disabled = false; 
+}
+
+function stopAutorefresh() {
+  clearInterval(intervalFunc);
+  if (childWindow != null) {
+    childWindow.close();
+    childWindow = null;
+  }
+  updateFrameURL("");
+  runState = RunState.STOPPED;
+  document.getElementById("statusDisplay").innerHTML = "Stopped";
+  document.getElementById("secsTillRequeryDisplay").innerHTML = "";
+  refreshCount = 0;
+  updateRefreshCountDisplay();
+  document.getElementById("stopButton").disabled = true;
+  document.getElementById("startButton").disabled = false;
+}
+
+function startInterval() {
+  if (childWindow != null) {
+    childWindow.close();
+  }
+  if (urlLoadOption == URLLoadOption.NEW_WINDOW) {
+    childWindow = window.open(queryURL, '_blank', "width=200, height=100");
+  }
+  else if (urlLoadOption == URLLoadOption.CURRENT_WINDOW) {
+    childWindow = window.open(queryURL, '_blank');
+	childWindow.blur();
+    window.focus();
+  }
+  else if (urlLoadOption == URLLoadOption.FRAME) {
+  
+  }
+  
+  currentTime = new Date();
+  requeryTime = dateAdd(currentTime, 'second', requerySeconds)
+  
+  refreshCount ++;
+  updateRefreshCountDisplay();
+}
+
+function updateFrameURL(newURL) {
+  document.getElementById('queryTargetFrame').src = newURL;
+}
+
+function updateCount() {
+  document.getElementById("countdownDisplay").innerHTML = "Seconds Till Requery: " + i;
+}
+
+function updateRefreshCountDisplay() {
+  document.getElementById("refreshCountDisplay").innerHTML = refreshCount;
+}
+
+function readTextInputs() {
+  var queryURLInput = document.getElementById('targetURL').value;
+  var requeryIntervalInput = document.getElementById('requeryInterval').value;
+  
+  // Validate URL and interval input
+}
+
+function keepTime() {
+  var currentTime = new Date();
+  
+  var currentTimeFormatted = formatTimeHMS(currentTime);
+
+  // Rather than run multiple interval timers, we'll run this one 
+  // and then call all the update functions from here. 
+  // A register/callback mechanism would be better.
+  updateClock(currentTimeFormatted);
+  if (runState == RunState.RUNNING) { // Only calculate and display this if we're in a requery cycle.
+    updateSecsTillRequery(currentTime);
+  }
+  // Use a 1 second (1000 millisecond) tick, good enough for our needs.
+  var t = setTimeout(keepTime, 1000);
+}
+
+function updateClock(newTime) {
+  document.getElementById('timeDisplay')  .innerHTML = newTime;
+}
+
+function updateSecsTillRequery(currentTime) {
+  // Subtract current time from requery time 
+  var secsTillRequery = (requeryTime.getTime() - currentTime.getTime()) / 1000;
+  document.getElementById("secsTillRequeryDisplay").innerHTML = Math.round(secsTillRequery);
+}
+
+function formatTimeHMS(timeIn) {
+  var hours = timeIn.getHours();
+  var minutes = timeIn.getMinutes();
+  var seconds = timeIn.getSeconds();
+  if (hours < 10) {
+    hmsTime = "0" + hours;
+  }
+  else {
+    hmsTime = hours;
+  }
+  hmsTime += ":";
+  if (minutes < 10) {
+    hmsTime += "0" + minutes;
+  }
+  else {
+    hmsTime += minutes;
+  }
+  hmsTime += ":";
+  if (seconds < 10) {
+    hmsTime += "0" + seconds;
+  }
+  else {
+    hmsTime += seconds;
+  }
+  
+  return hmsTime;
+}
+
+
+function setIFrameVisibility(visible) {
+  var frameDiv = document.getElementById("embedded-page");
+  if (visible === 1) {
+    frameDiv.style.display = "block";
+  } else {
+    frameDiv.style.display = "none";
+  }
+}
+
+function loadURLSelect(selectedValue) {
+  if (selectedValue == "optPage") {
+    urlLoadOption = URLLoadOption.NEW_WINDOW;
+  }
+  else if (selectedValue == "optCurrentWindow") {
+    urlLoadOption = URLLoadOption.CURRENT_WINDOW;
+  }
+  else if (selectedValue == "optFrame") {
+    urlLoadOption = URLLoadOption.FRAME;
+  }
+  else {
+    console.log("Invalid Selection");
+  }
+ 
+}
+
+function urlUpdate(newValue) {
+  queryURL = newValue;
+}
+
+function intervalUpdate(newValue) {
+  if ((newValue < 1) || (newValue > 86400)) {
+    alert ("Valid values are 1 - 86400.")
+    document.getElementById("requeryIntervalInput").value = requerySeconds;
+  }
+  else {
+    requerySeconds = newValue;
+  }
+}
+
+function intervalMinUpdate(newValue) {
+  if ((newValue < 0) || (newValue > 86400)) {
+    alert ("Valid values are 0 - 86400. Set to 0 to iterate until you press stop")
+    document.getElementById("requeryIntervalMinInput").value = intervalMinSeconds;
+  }
+  else {
+    intervalMinSeconds = newValue;
+  }
+}
+
+function intervalMaxUpdate(newValue) {
+  if ((newValue < 0) || (newValue > 86400)) {
+    alert ("Valid values are 0 - 86400. Set to 0 to iterate until you press stop")
+    document.getElementById("requeryIntervalMinInput").value = intervalMaxSeconds;
+  }
+  else {
+    intervalMaxSeconds = newValue;
+  }
+  intervalMaxSeconds = newValue;
+}
+
+function iterationsUpdate(newValue) {
+  if ((newValue < 0) || (newValue > 99999)) {
+    alert ("Valid values are 0 - 99999. Set to 0 to iterate until you press stop")
+    document.getElementById("iterationsInput").value = iterations;
+  }
+  else {
+    iterations = newValue;
+  }
+}
+
+// Enable or disable input fields
+function enableInputs(enabled) {
+  // parameter should be 0 (disabled) or 1 (enabled)
+  
+}
+
+/**
+ * Adds time to a date. Modelled after MySQL DATE_ADD function.
+ * Example: dateAdd(new Date(), 'minutes', 30)  //returns 30 minutes from now.
+ * 
+ * @param date  Date to start with
+ * @param interval  One of: year, quarter, month, week, day, hour, minute, second
+ * @param units  Number of units of the given interval to add.
+ * Taken from https://stackoverflow.com/questions/1197928/how-to-add-30-minutes-to-a-javascript-date-object#1214753
+ */
+function dateAdd(date, interval, units) {
+  var ret = new Date(date); //don't change original date
+  var checkRollover = function() { if(ret.getDate() != date.getDate()) ret.setDate(0);};
+  switch(interval.toLowerCase()) {
+    case 'year'   :  ret.setFullYear(ret.getFullYear() + units); checkRollover();  break;
+    case 'quarter':  ret.setMonth(ret.getMonth() + 3*units); checkRollover();  break;
+    case 'month'  :  ret.setMonth(ret.getMonth() + units); checkRollover();  break;
+    case 'week'   :  ret.setDate(ret.getDate() + 7*units);  break;
+    case 'day'    :  ret.setDate(ret.getDate() + units);  break;
+    case 'hour'   :  ret.setTime(ret.getTime() + units*3600000);  break;
+    case 'minute' :  ret.setTime(ret.getTime() + units*60000);  break;
+    case 'second' :  ret.setTime(ret.getTime() + units*1000);  break;
+    default       :  ret = undefined;  break;
+  }
+  return ret;
+}
+
+</script>
+
+</body>
+</html>
